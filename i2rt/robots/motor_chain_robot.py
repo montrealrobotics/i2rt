@@ -675,11 +675,14 @@ class MotorChainRobot(Robot):
         return torques
 
     def zero_torque_mode(self) -> None:
+        """Drop the active command: no PD and no feedforward torque, only gravity (and friction) compensation.
+
+        The configured kp/kd are kept, so a later ``command_joint_pos`` tracks with its normal gains.
+        Unlike ``enter_gravity_comp_idle`` this applies no damping.
+        """
         logging.info(f"Entering zero_torque_mode for {self}")
         with self._command_lock:
             self._commands = JointCommands.init_all_zero(len(self.motor_chain))
-            self._kp = np.zeros(len(self.motor_chain))
-            self._kd = np.zeros(len(self.motor_chain))
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         """Get the current observations of the robot.

@@ -146,3 +146,25 @@ def test_feedforward_torque_is_added_on_top_of_gravity_compensation(chain: FakeM
 def test_command_torque_rejects_wrong_length(robot: MotorChainRobot) -> None:
     with pytest.raises(AssertionError):
         robot.command_torque(np.zeros(N + 1))
+
+
+def test_zero_torque_mode_sends_no_pd(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    robot.command_joint_pos(np.zeros(N))
+    robot.zero_torque_mode()
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["kp"], 0.0)
+    np.testing.assert_allclose(frame["kd"], 0.0)
+    np.testing.assert_allclose(frame["torques"], 0.0)
+
+
+def test_zero_torque_mode_keeps_configured_gains_for_later_commands(
+    robot: MotorChainRobot, chain: FakeMotorChain
+) -> None:
+    robot.zero_torque_mode()
+    robot.command_joint_pos(np.full(N, 0.2))
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["kp"], KP)
+    np.testing.assert_allclose(frame["kd"], KD)
+    np.testing.assert_allclose(robot.get_robot_info()["kp"], KP)
