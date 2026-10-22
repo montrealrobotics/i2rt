@@ -107,6 +107,48 @@ class MotorChainRobot(Robot):
         self._arm_type = arm_type
         self._gripper_type = gripper_type
         self.temp_record_flag = temp_record_flag
+
+        # make sure kp, kd are float number not int
+        self._kp = (
+            np.array(
+                [
+                    kp,
+                ]
+                * len(motor_chain)
+            )
+            if isinstance(kp, float)
+            else np.array(kp)
+        )
+        self._kd = (
+            np.array(
+                [
+                    kd,
+                ]
+                * len(motor_chain)
+            )
+            if isinstance(kd, float)
+            else np.array(kd)
+        )
+
+        self._joint_limits: Optional[np.ndarray] = None
+        if xml_path is not None:
+            self.xml_path = os.path.expanduser(xml_path)
+            self.kdl = MuJoCoKDL(self.xml_path)
+            if gravity is not None:
+                self.kdl.set_gravity(gravity)
+            # Load the joint limits from the xml file
+            self._joint_limits = self.kdl.joint_limits
+        else:
+            assert use_gravity_comp is False, "Gravity compensation requires a valid XML path."
+
+        # override the xml joint limits with the provided joint_limits
+        if joint_limits is not None:
+            joint_limits = np.array(joint_limits)
+            assert np.all(joint_limits[:, 0] < joint_limits[:, 1]), (
+                "Lower joint limits must be smaller than upper limits"
+            )
+            self._joint_limits = joint_limits
+
         if gripper_index is not None:
             assert gripper_index == len(motor_chain) - 1, (
                 "Gripper index should be the last one, but got {gripper_index}"
@@ -126,6 +168,11 @@ class MotorChainRobot(Robot):
                     max_duration=test_duration,
                     position_threshold=position_threshold,
                     check_interval=check_interval,
+                    arm_hold_kp=self._kp,
+                    arm_hold_kd=self._kd,
+                    arm_hold_torques=self._calibration_arm_hold_torques(
+                        motor_chain, gripper_index, use_gravity_comp, gravity_comp_factor
+                    ),
                 )
                 gripper_limits = np.array(detected_limits)
                 logger.info(f"Gripper limits auto-detected: {gripper_limits}")
@@ -169,27 +216,6 @@ class MotorChainRobot(Robot):
                 total_dofs=len(motor_chain),
             )
 
-        # make sure kp, kd are float number not int
-        self._kp = (
-            np.array(
-                [
-                    kp,
-                ]
-                * len(motor_chain)
-            )
-            if isinstance(kp, float)
-            else np.array(kp)
-        )
-        self._kd = (
-            np.array(
-                [
-                    kd,
-                ]
-                * len(motor_chain)
-            )
-            if isinstance(kd, float)
-            else np.array(kd)
-        )
         self._grav_comp_kd = (
             np.array(grav_comp_kd, dtype=float) if grav_comp_kd is not None else np.zeros(len(motor_chain))
         )
@@ -204,24 +230,6 @@ class MotorChainRobot(Robot):
             f"coulomb_friction length {len(self._coulomb_friction)} != motor_chain length {len(motor_chain)}"
         )
 
-        self._joint_limits: Optional[np.ndarray] = None
-        if xml_path is not None:
-            self.xml_path = os.path.expanduser(xml_path)
-            self.kdl = MuJoCoKDL(self.xml_path)
-            if gravity is not None:
-                self.kdl.set_gravity(gravity)
-            # Load the joint limits from the xml file
-            self._joint_limits = self.kdl.joint_limits
-        else:
-            assert use_gravity_comp is False, "Gravity compensation requires a valid XML path."
-
-        # override the xml joint limits with the provided joint_limits
-        if joint_limits is not None:
-            joint_limits = np.array(joint_limits)
-            assert np.all(joint_limits[:, 0] < joint_limits[:, 1]), (
-                "Lower joint limits must be smaller than upper limits"
-            )
-            self._joint_limits = joint_limits
         # Initialize joint state saver if factory is provided
         if self._joint_state_saver_factory is not None:
             self._joint_state_saver = self._joint_state_saver_factory()
@@ -251,6 +259,24 @@ class MotorChainRobot(Robot):
         if not zero_gravity_mode:
             # set current qpos as target pos with the default PD parameters
             self.command_joint_pos(self._joint_state.pos)
+
+    def _calibration_arm_hold_torques(
+        self,
+        motor_chain: MotorChain,
+        gripper_index: int,
+        use_gravity_comp: bool,
+        gravity_comp_factor: Optional[np.ndarray],
+    ) -> Optional[np.ndarray]:
+        """Gravity torques that hold the arm joints at their current pose while the gripper is calibrated.
+
+        Returns None (calibration then holds with PD alone) when there is no gravity model.
+        """
+        if not use_gravity_comp or not hasattr(self, "kdl"):
+            return None
+        q = np.array([state.pos for state in motor_chain.read_states()])[:gripper_index]
+        g = self.kdl.compute_inverse_dynamics(q, np.zeros(q.shape), np.zeros(q.shape))
+        factor = np.ones(len(motor_chain)) if gravity_comp_factor is None else np.asarray(gravity_comp_factor)
+        return g * factor[:gripper_index]
 
     def __repr__(self) -> str:
         return f"MotorChainRobot(arm_type={self._arm_type}, gripper_type={self._gripper_type}, motor_chain={self.motor_chain})"

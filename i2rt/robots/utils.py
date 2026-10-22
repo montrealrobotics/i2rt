@@ -789,9 +789,17 @@ def detect_gripper_limits(
     max_duration: float = 2.0,
     position_threshold: float = 0.01,
     check_interval: float = 0.1,
+    arm_hold_kp: Optional[np.ndarray] = None,
+    arm_hold_kd: Optional[np.ndarray] = None,
+    arm_hold_torques: Optional[np.ndarray] = None,
 ) -> Tuple[float, float]:
     """
     Detect gripper limits by applying test torques and monitoring position changes.
+
+    While the gripper is driven, every other joint is held: with PD at its starting position
+    (``arm_hold_kp``/``arm_hold_kd``) plus a feedforward torque (``arm_hold_torques``, e.g. the
+    gravity torques at that pose). Each hold argument that is omitted falls back to the old
+    behaviour: no PD, and the torque each joint reported once at the start.
 
     Args:
         motor_chain: Motor chain interface
@@ -800,6 +808,9 @@ def detect_gripper_limits(
         max_duration: Maximum test duration for each direction (s)
         position_threshold: Minimum position change to consider motor still moving (rad)
         check_interval: Time interval between checks (s)
+        arm_hold_kp: Per-motor kp holding the non-gripper joints (gripper entry ignored)
+        arm_hold_kd: Per-motor kd holding the non-gripper joints (gripper entry ignored)
+        arm_hold_torques: Feedforward torques (Nm) for the joints before ``gripper_index``
 
     Returns:
         List of detected limits [limit1, limit2]
@@ -807,22 +818,34 @@ def detect_gripper_limits(
     logger = logging.getLogger(__name__)
     positions = []
     num_motors = len(motor_chain.motor_list)
-    zero_torques = np.zeros(num_motors)
 
     # Get motor direction for the gripper
     motor_direction = motor_chain.motor_direction[gripper_index]
 
     # Record initial position
     initial_states = motor_chain.read_states()
-    init_torque = np.array([state.eff for state in initial_states])
+    initial_joint_pos = np.array([state.pos for state in initial_states])
     initial_pos = initial_states[gripper_index].pos
     positions.append(initial_pos)
     logger.info(f"Gripper calibration starting from position: {initial_pos:.4f}")
 
+    # Hold every non-gripper joint at its starting position while the gripper is driven.
+    arm = np.arange(num_motors) != gripper_index
+    hold_torques = np.array([state.eff for state in initial_states], dtype=float)
+    if arm_hold_torques is not None:
+        hold_torques[:gripper_index] = np.asarray(arm_hold_torques, dtype=float)[:gripper_index]
+    hold_torques[gripper_index] = 0.0
+    hold_kp = np.zeros(num_motors)
+    hold_kd = np.zeros(num_motors)
+    if arm_hold_kp is not None:
+        hold_kp[arm] = np.asarray(arm_hold_kp, dtype=float)[arm]
+    if arm_hold_kd is not None:
+        hold_kd[arm] = np.asarray(arm_hold_kd, dtype=float)[arm]
+
     # Test both directions
     for direction in [1, -1]:
         logger.info(f"Testing gripper direction: {direction}")
-        test_torques = init_torque
+        test_torques = hold_torques.copy()
         test_torques[gripper_index] = direction * test_torque
 
         start_time = time.time()
@@ -830,7 +853,7 @@ def detect_gripper_limits(
         position_stable_count = 0
 
         while time.time() - start_time < max_duration:
-            motor_chain.set_commands(torques=test_torques)
+            motor_chain.set_commands(torques=test_torques, pos=initial_joint_pos, kp=hold_kp, kd=hold_kd)
             time.sleep(check_interval)
 
             states = motor_chain.read_states()
@@ -853,6 +876,9 @@ def detect_gripper_limits(
             last_pos = current_pos
 
         time.sleep(0.3)
+
+    # Stop pushing the gripper; keep holding the arm until the caller takes over.
+    motor_chain.set_commands(torques=hold_torques, pos=initial_joint_pos, kp=hold_kp, kd=hold_kd)
 
     # Calculate detected limits
     min_pos = min(positions)

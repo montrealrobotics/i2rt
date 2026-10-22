@@ -2,7 +2,7 @@
 
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -12,7 +12,15 @@ from i2rt.motor_drivers.dm_driver import MotorInfo
 class FakeMotorChain:
     """Records every command frame and reports a fixed (settable) motor state."""
 
-    def __init__(self, n: int, pos: Optional[np.ndarray] = None, eff: Optional[np.ndarray] = None) -> None:
+    def __init__(
+        self,
+        n: int,
+        pos: Optional[np.ndarray] = None,
+        eff: Optional[np.ndarray] = None,
+        gripper_range: Optional[Tuple[float, float]] = None,
+    ) -> None:
+        """``gripper_range``: if set, the last motor is a gripper that jumps to the end of this range
+        in the direction of any torque commanded on it, as when calibration drives it to its end stops."""
         self.motor_list = [[i + 1, "DM4310"] for i in range(n)]
         self.motor_direction = np.ones(n)
         self.running = True
@@ -21,6 +29,7 @@ class FakeMotorChain:
         self.pos = np.zeros(n) if pos is None else np.asarray(pos, dtype=float)
         self.vel = np.zeros(n)
         self.eff = np.zeros(n) if eff is None else np.asarray(eff, dtype=float)
+        self.gripper_range = gripper_range
         self.frames: List[dict] = []
         self._lock = threading.Lock()
 
@@ -52,6 +61,8 @@ class FakeMotorChain:
         }
         with self._lock:
             self.frames.append(frame)
+        if self.gripper_range is not None and frame["torques"][-1] != 0.0:
+            self.pos[-1] = max(self.gripper_range) if frame["torques"][-1] > 0 else min(self.gripper_range)
         return self.read_states()
 
     def last_frame(self) -> dict:
