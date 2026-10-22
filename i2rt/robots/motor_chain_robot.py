@@ -543,6 +543,19 @@ class MotorChainRobot(Robot):
         with self._state_lock:
             return self._joint_state.pos
 
+    def get_joint_state(self) -> Dict[str, np.ndarray]:
+        """Get the current joint positions, velocities and efforts, including the gripper.
+
+        Returns:
+            Dict[str, np.ndarray]: ``pos`` (rad), ``vel`` (rad/s) and ``eff`` (Nm), each of length ``num_dofs()``.
+        """
+        with self._state_lock:
+            return {
+                "pos": self._joint_state.pos.copy(),
+                "vel": self._joint_state.vel.copy(),
+                "eff": self._joint_state.eff.copy(),
+            }
+
     def _clip_robot_joint_pos_command(self, pos: np.ndarray) -> np.ndarray:
         """Clip the robot joint pos command to the joint limits. Do not clip the gripper pos.
         Args:
