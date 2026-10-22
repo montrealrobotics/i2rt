@@ -1,5 +1,6 @@
 """MotorChainRobot command/state API, exercised against an in-memory motor chain (no CAN bus)."""
 
+import threading
 import time
 from typing import Iterator
 
@@ -78,3 +79,22 @@ def test_command_target_vel_still_allows_moving_back_into_range(robot: MotorChai
     frame = _wait_for_frame(chain, len(chain.frames))
 
     assert frame["vel"][0] == pytest.approx(-0.5)
+
+
+def test_command_joint_state_never_publishes_a_half_built_command(robot: MotorChainRobot) -> None:
+    """While the control thread holds the command lock, command_joint_state must not touch self._commands."""
+    robot.command_joint_pos(np.zeros(N))
+    before = robot._commands
+    target = {"pos": np.full(N, 0.3), "vel": np.zeros(N)}
+
+    with robot._command_lock:
+        writer = threading.Thread(target=robot.command_joint_state, args=(target,))
+        writer.start()
+        writer.join(timeout=0.05)
+        assert robot._commands is before
+        np.testing.assert_allclose(robot._commands.kp, KP)
+
+    writer.join(timeout=1.0)
+    np.testing.assert_allclose(robot._commands.pos, 0.3)
+    np.testing.assert_allclose(robot._commands.kp, KP)
+    np.testing.assert_allclose(robot._commands.kd, KD)
