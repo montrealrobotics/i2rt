@@ -44,3 +44,37 @@ def test_get_joint_state_returns_pos_vel_eff(robot: MotorChainRobot, chain: Fake
     np.testing.assert_allclose(state["pos"], chain.pos)
     np.testing.assert_allclose(state["vel"], chain.vel)
     np.testing.assert_allclose(state["eff"], chain.eff)
+
+
+def test_command_target_vel_sends_damping_only_velocity_command(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    target = np.array([0.5, -0.5, 0.2, -0.2, 0.1, -0.1])
+
+    robot.command_target_vel(target)
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["vel"], target)
+    np.testing.assert_allclose(frame["kp"], 0.0)
+    np.testing.assert_allclose(frame["kd"], KD)
+
+
+def test_command_target_vel_does_not_drive_a_joint_past_its_limit(
+    robot: MotorChainRobot, chain: FakeMotorChain
+) -> None:
+    chain.pos[0] = LIMITS[0, 1]  # joint 1 at its upper limit
+    chain.pos[1] = LIMITS[1, 0]  # joint 2 at its lower limit
+    _wait_for_frame(chain, len(chain.frames))
+
+    robot.command_target_vel(np.array([0.5, -0.5, 0.2, 0.0, 0.0, 0.0]))
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["vel"], [0.0, 0.0, 0.2, 0.0, 0.0, 0.0])
+
+
+def test_command_target_vel_still_allows_moving_back_into_range(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    chain.pos[0] = LIMITS[0, 1]
+    _wait_for_frame(chain, len(chain.frames))
+
+    robot.command_target_vel(np.array([-0.5, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    assert frame["vel"][0] == pytest.approx(-0.5)

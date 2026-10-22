@@ -359,6 +359,7 @@ class MotorChainRobot(Robot):
         with self._command_lock:
             joint_commands = copy.deepcopy(self._commands)
         with self._state_lock:
+            self._stop_velocity_past_joint_limits(joint_commands)
             g = self._compute_gravity_compensation(self._joint_state)
             friction_comp = (
                 self._coulomb_friction * np.sign(self._joint_state.vel) if self.use_coulomb_friction else 0.0
@@ -394,6 +395,21 @@ class MotorChainRobot(Robot):
                 )
                 self._last_gripper_command_qpos = joint_commands.pos[self._gripper_index]
             self._update_joint_state(motor_torques, joint_commands)
+
+    def _stop_velocity_past_joint_limits(self, joint_commands: JointCommands) -> None:
+        """Zero the target velocity of any arm joint at or past a limit and commanded further out of range.
+
+        Position targets are clipped when commanded, but a velocity target keeps driving a joint
+        until the runtime limit check stops the whole chain; this makes the damping term brake it instead.
+        """
+        if self._joint_limits is None or self._joint_state is None:
+            return
+        n_arm = self._gripper_index if self._gripper_index is not None else len(self.motor_chain)
+        limits = self._joint_limits[:n_arm]
+        q = self._joint_state.pos[:n_arm]
+        vel = joint_commands.vel[:n_arm]
+        outward = ((q >= limits[:, 1]) & (vel > 0)) | ((q <= limits[:, 0]) & (vel < 0))
+        joint_commands.vel[:n_arm] = np.where(outward, 0.0, vel)
 
     def _update_joint_state(
         self,
@@ -587,6 +603,27 @@ class MotorChainRobot(Robot):
             self._commands.pos = self.remapper.to_robot_joint_pos_space(pos)
             self._commands.kp = self._kp
             self._commands.kd = self._kd
+
+    def command_target_vel(self, joint_vel: np.ndarray) -> None:
+        """Track target joint velocities, including the gripper, in rad/s.
+
+        Uses the motors' damping term alone (MIT mode with kp = 0 and the configured kd), so each
+        motor applies ``kd * (joint_vel - vel)`` on top of gravity compensation. Tracking is
+        proportional: friction leaves a small lag behind the target. A joint at a limit is not
+        driven further out of range.
+
+        Args:
+            joint_vel (np.ndarray): Target joint velocities, length ``num_dofs()``.
+        """
+        vel = np.asarray(joint_vel, dtype=float)
+        assert vel.shape == (len(self.motor_chain),), f"expected {len(self.motor_chain)} velocities, got {vel.shape}"
+        commands = JointCommands.init_all_zero(len(self.motor_chain))
+        with self._state_lock:
+            commands.pos = self.remapper.to_robot_joint_pos_space(self._joint_state.pos.copy())
+        commands.vel = self.remapper.to_robot_joint_vel_space(vel)
+        commands.kd = self._kd.copy()
+        with self._command_lock:
+            self._commands = commands
 
     def command_joint_state(self, joint_state: Dict[str, np.ndarray]) -> None:
         """Command the leader robot to a given state.
