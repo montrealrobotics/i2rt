@@ -626,10 +626,15 @@ class MotorChainRobot(Robot):
             self._commands = commands
 
     def command_joint_state(self, joint_state: Dict[str, np.ndarray]) -> None:
-        """Command the leader robot to a given state.
+        """Command the robot to a given state.
+
+        Each motor applies ``kp * (pos - q) + kd * (vel - q_dot) + torques``, plus gravity (and, if
+        enabled, friction) compensation.
 
         Args:
-            joint_state (Dict[str, np.ndarray]): The state to command the leader robot to.
+            joint_state (Dict[str, np.ndarray]): ``pos`` (rad) and ``vel`` (rad/s) targets; optional
+                ``kp``/``kd`` gains (default: the configured gains) and optional ``torques`` (Nm), a
+                feedforward added on top of gravity compensation. All of length ``num_dofs()``.
         """
         pos = self._clip_robot_joint_pos_command(joint_state["pos"])
         vel = joint_state["vel"]
@@ -640,8 +645,34 @@ class MotorChainRobot(Robot):
         commands.vel = self.remapper.to_robot_joint_vel_space(vel)
         commands.kp = np.array(joint_state.get("kp", self._kp), dtype=float)
         commands.kd = np.array(joint_state.get("kd", self._kd), dtype=float)
+        if "torques" in joint_state:
+            commands.torques = self._checked_torques(joint_state["torques"])
         with self._command_lock:
             self._commands = commands
+
+    def command_torque(self, torques: np.ndarray) -> None:
+        """Command joint torques directly, including the gripper, in Nm.
+
+        Position and velocity gains are zero, so each motor applies ``torques`` on top of gravity
+        (and, if enabled, friction) compensation; ``clip_motor_torque`` still bounds the total.
+
+        Args:
+            torques (np.ndarray): Feedforward torques, length ``num_dofs()``.
+        """
+        commands = JointCommands.init_all_zero(len(self.motor_chain))
+        commands.torques = self._checked_torques(torques)
+        with self._state_lock:
+            commands.pos = self.remapper.to_robot_joint_pos_space(self._joint_state.pos.copy())
+        with self._command_lock:
+            self._commands = commands
+
+    def _checked_torques(self, torques: np.ndarray) -> np.ndarray:
+        torques = np.array(torques, dtype=float)
+        assert torques.shape == (len(self.motor_chain),), (
+            f"expected {len(self.motor_chain)} torques, got shape {torques.shape}"
+        )
+        assert np.all(np.isfinite(torques)), f"torques must be finite, got {torques}"
+        return torques
 
     def zero_torque_mode(self) -> None:
         logging.info(f"Entering zero_torque_mode for {self}")

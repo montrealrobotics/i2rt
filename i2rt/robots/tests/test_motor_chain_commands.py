@@ -98,3 +98,51 @@ def test_command_joint_state_never_publishes_a_half_built_command(robot: MotorCh
     np.testing.assert_allclose(robot._commands.pos, 0.3)
     np.testing.assert_allclose(robot._commands.kp, KP)
     np.testing.assert_allclose(robot._commands.kd, KD)
+
+
+def test_command_joint_state_passes_feedforward_torques(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    tau = np.array([1.0, -1.0, 0.5, -0.5, 0.1, -0.1])
+
+    robot.command_joint_state({"pos": np.zeros(N), "vel": np.zeros(N), "torques": tau})
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["torques"], tau)  # gravity comp is off in this fixture
+    np.testing.assert_allclose(frame["kp"], KP)
+
+
+def test_command_joint_state_without_torques_sends_none(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    robot.command_joint_state({"pos": np.zeros(N), "vel": np.zeros(N)})
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["torques"], 0.0)
+
+
+def test_command_torque_sends_pure_torque(robot: MotorChainRobot, chain: FakeMotorChain) -> None:
+    tau = np.array([0.5, 0.4, 0.3, 0.2, 0.1, 0.0])
+
+    robot.command_torque(tau)
+    frame = _wait_for_frame(chain, len(chain.frames))
+
+    np.testing.assert_allclose(frame["torques"], tau)
+    np.testing.assert_allclose(frame["kp"], 0.0)
+    np.testing.assert_allclose(frame["kd"], 0.0)
+
+
+def test_feedforward_torque_is_added_on_top_of_gravity_compensation(chain: FakeMotorChain) -> None:
+    robot = MotorChainRobot(chain, use_gravity_comp=False, joint_limits=LIMITS, kp=KP, kd=KD)
+    try:
+        gravity = np.array([0.0, 2.0, 1.0, 0.5, 0.0, 0.0])
+        robot._compute_gravity_compensation = lambda _state: gravity  # stand-in for the MuJoCo model
+        tau = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+
+        robot.command_torque(tau)
+        frame = _wait_for_frame(chain, len(chain.frames))
+
+        np.testing.assert_allclose(frame["torques"], gravity + tau)
+    finally:
+        robot.close()
+
+
+def test_command_torque_rejects_wrong_length(robot: MotorChainRobot) -> None:
+    with pytest.raises(AssertionError):
+        robot.command_torque(np.zeros(N + 1))
