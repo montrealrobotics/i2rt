@@ -34,7 +34,7 @@ class Robot(Protocol):
         Returns:
             np.ndarray: The current joint positions of the robot in radians.
         """
-        pass
+        raise NotImplementedError
 
     def get_joint_state(self) -> Dict[str, np.ndarray]:
         """Get the current joint positions and velocities of the robot in radians.
@@ -42,7 +42,7 @@ class Robot(Protocol):
         Returns:
             Dict[str, np.ndarray]: A dictionary containing the current joint positions and velocities of the robot in radians.
         """
-        pass
+        raise NotImplementedError
 
     def command_joint_pos(self, joint_pos: np.ndarray) -> None:
         """Command the leader robot to a given state.
@@ -50,7 +50,7 @@ class Robot(Protocol):
         Args:
             joint_pos (np.ndarray): The state to command the leader robot to.
         """
-        pass
+        raise NotImplementedError
 
     def command_target_vel(self, joint_vel: np.ndarray) -> None:
         """Command the leader robot to a given state.
@@ -58,7 +58,7 @@ class Robot(Protocol):
         Args:
             joint_vel (np.ndarray): The state to command the leader robot to.
         """
-        pass
+        raise NotImplementedError
 
     def command_joint_state(self, joint_state: Dict[str, np.ndarray]) -> None:
         """Command the leader robot to a given state.
@@ -66,7 +66,7 @@ class Robot(Protocol):
         Args:
             joint_state (Dict[str, np.ndarray]): The state to command the leader robot to.
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def get_observations(self) -> Dict[str, np.ndarray]:
